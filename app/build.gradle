@@ -1,0 +1,40 @@
+apply plugin: 'com.android.application'
+apply plugin: 'com.chaquo.python'
+
+android {
+    namespace 'com.example.twincat2'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.twincat2"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // Python 3.12 起 Chaquopy 只支持 64 位 ABI（armeabi-v7a / x86 已移除）
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        // ★ python {} 必须放在 defaultConfig 内部，
+        //   不能直接挂在 android {} 下，否则 Gradle 报 Could not find method python()
+        python {
+            version "3.12"
+            // Python 源码默认目录即 app/src/main/python，无需额外配置
+            pip {
+                install "ntlm_auth"
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+}
