@@ -60,8 +60,29 @@ jobs:
       - name: Gradle version check
         run: gradle --version
 
+      # Chaquopy 的 pip 块需要构建机上有与 app 匹配的 Python（3.12）。
+      - name: Check build Python (needed by Chaquopy pip)
+        run: |
+          python3.12 --version || true
+          python3 --version || true
+          python --version || true
+
+      # 把 gradle 输出写文件；失败时把「FAILURE / What went wrong」块**重新打印到日志末尾**，
+      # 这样即使只截屏日志底部也能看到真正的报错（不再被 --stacktrace 的框架栈淹没）。
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --stacktrace > build.log 2>&1
+          rc=$?
+          echo "===== FULL GRADLE LOG ====="
+          cat build.log
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "########## KEY ERROR (re-printed at end for visibility) ##########"
+            awk '/^FAILURE: Build failed/{p=1} p' build.log | head -80
+            echo "########## END KEY ERROR ##########"
+          fi
+          exit "$rc"
 
       - name: Upload APK
         if: success()
