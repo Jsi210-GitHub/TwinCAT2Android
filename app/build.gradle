@@ -1,18 +1,62 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://chaquo.com/maven' }
+apply plugin: 'com.android.application'
+apply plugin: 'com.chaquo.python'
+
+android {
+    namespace 'com.example.twincat2'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.twincat2"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // Python 3.12 起 Chaquopy 只支持 64 位 ABI（armeabi-v7a / x86 已移除）
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        // ★ python {} 必须放在 defaultConfig 内部，
+        //   不能直接挂在 android {} 下，否则 Gradle 报 Could not find method python()
+        python {
+            version "3.12"
+            // Python 源码默认目录即 app/src/main/python，无需额外配置
+            pip {
+                install "ntlm_auth"
+            }
+        }
     }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.3.2'
-        classpath 'com.chaquo.python:gradle:15.0.1'
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 私有密钥签名：仓库根目录存在 upload-keystore.jks 时才启用。
+    // 这样本地无密钥也能照常构建（仅打未签名包）；
+    // CI 检出到密钥后自动打「已签名 release」，Play Protect 不再当风险应用删除。
+    def releaseKeystore = rootProject.file("upload-keystore.jks")
+    if (releaseKeystore.exists()) {
+        signingConfigs {
+            release {
+                storeFile releaseKeystore
+                storePassword "TwinCAT2Sign2026"
+                keyAlias "twincat2"
+                keyPassword "TwinCAT2Sign2026"
+                storeType "PKCS12"
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig signingConfigs.release
+                minifyEnabled false
+            }
+        }
     }
 }
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
 }
