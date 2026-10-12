@@ -1,0 +1,41 @@
+apply plugin: 'com.android.application'
+apply plugin: 'com.chaquo.python'
+
+android {
+    namespace 'com.example.twincat2'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.twincat2"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // Chaquopy 的 Python 解释器是原生组件，必须显式声明 ABI。
+        // Python 3.12 起只支持 64 位：armeabi-v7a / x86 已在 3.12 被移除，
+        // 若不加 abiFilters，Chaquopy 默认会带上 32 位 ABI 导致构建失败。
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        // Chaquopy 旧版 Groovy DSL（15.0.1 仍支持）：python 块必须在 defaultConfig 内，
+        // 不能直接挂在 android 下，否则 Gradle 报 "Could not find method python()"。
+        python {
+            version "3.12"
+            pip {
+                install "ntlm_auth"
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+}
