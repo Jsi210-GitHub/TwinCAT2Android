@@ -1,0 +1,12 @@
+# SDK / local
+local.properties
+
+# Build outputs
+.gradle/
+build/
+app/build/
+gradle-8.4/
+gradle.zip
+
+# OS
+.DS_Store
