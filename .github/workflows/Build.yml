@@ -20,28 +20,51 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # setup-android 会：安装 cmdline-tools、导出 ANDROID_HOME、
+      # 并通过 packages 输入自动安装所需组件并静默接受 license。
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
-      - name: Install SDK packages & accept licenses
+      # 让 Gradle 能找到 SDK：优先用 setup-android 导出的 ANDROID_HOME，
+      # 缺失时回退到常见安装路径。sdk.dir 优先级高于 ANDROID_HOME，写对即可。
+      - name: Write local.properties (SDK location)
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          echo "ANDROID_HOME=$ANDROID_HOME"
+          # setup-android 可能导出 ANDROID_HOME，也可能只导出 ANDROID_SDK_ROOT / 装到 $HOME/.android/sdk。
+          # 统一收敛到 ANDROID_HOME 再写 local.properties（sdk.dir 优先级高于 ANDROID_HOME 本身）。
+          if [ -z "$ANDROID_HOME" ] && [ -n "$ANDROID_SDK_ROOT" ]; then
+            ANDROID_HOME="$ANDROID_SDK_ROOT"
+          fi
+          if [ -z "$ANDROID_HOME" ]; then
+            echo "ANDROID_HOME 为空，尝试常见安装路径"
+            for p in "$HOME/Android/Sdk" "$HOME/Library/Android/sdk" "$HOME/.android/sdk" /usr/local/lib/android/sdk; do
+              if [ -d "$p" ]; then ANDROID_HOME="$p"; break; fi
+            done
+          fi
+          echo "Using ANDROID_HOME=$ANDROID_HOME"
+          ls -la "$ANDROID_HOME"
+          test -d "$ANDROID_HOME/platforms/android-34" && echo "platform android-34 OK" || echo "MISSING platform android-34"
+          test -d "$ANDROID_HOME/build-tools/34.0.0" && echo "build-tools 34.0.0 OK" || echo "MISSING build-tools 34.0.0"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+          echo "--- local.properties ---"
+          cat local.properties
 
-      - name: Point Gradle at the SDK
-        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
-
-      - name: Install Gradle 8.4 (no wrapper needed)
+      # 用独立 Gradle 8.4（与 gradle-wrapper.properties 一致），避免依赖 wrapper jar。
+      - name: Install Gradle 8.4
         run: |
           curl -sL https://services.gradle.org/distributions/gradle-8.4-bin.zip -o gradle.zip
           unzip -q gradle.zip
           echo "$(pwd)/gradle-8.4/bin" >> "$GITHUB_PATH"
 
+      - name: Gradle version check
+        run: gradle --version
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v7.0.2
         with:
           name: TwinCAT2Login-debug-apk
