@@ -27,28 +27,41 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
-      # 让 Gradle 能找到 SDK：优先用 setup-android 导出的 ANDROID_HOME，
-      # 缺失时回退到常见安装路径。sdk.dir 优先级高于 ANDROID_HOME，写对即可。
+      # 打印仓库树，便于确认工程是否被多套了一层目录
+      - name: Show repo layout
+        run: |
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          find "$GITHUB_WORKSPACE" -maxdepth 4 -not -path '*/.git/*' | sort | head -200
+
+      # 自动定位包含 settings.gradle 的工程根目录，兼容「被套一层」的仓库结构。
+      # 排除 .github（那里的 settings.gradle 是误放，不是真正的工程）。
+      - name: Locate Gradle project root
+        run: |
+          ROOT="$(dirname "$(find "$GITHUB_WORKSPACE" -maxdepth 5 -name settings.gradle -not -path '*/.git/*' -not -path '*/.github/*' | head -1)")"
+          if [ -z "$ROOT" ] || [ "$ROOT" = "." ]; then
+            echo "ERROR: 未在仓库中找到 settings.gradle（.github 下的不算）。工程文件很可能没被 push 到仓库根目录。"
+            exit 1
+          fi
+          echo "GRADLE_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Gradle project root = $ROOT"
+
+      # 让 Gradle 能找到 SDK：local.properties 必须写在工程根目录（即 settings.gradle 所在处）。
       - name: Write local.properties (SDK location)
         run: |
-          # setup-android 可能导出 ANDROID_HOME，也可能只导出 ANDROID_SDK_ROOT / 装到 $HOME/.android/sdk。
-          # 统一收敛到 ANDROID_HOME 再写 local.properties（sdk.dir 优先级高于 ANDROID_HOME 本身）。
           if [ -z "$ANDROID_HOME" ] && [ -n "$ANDROID_SDK_ROOT" ]; then
             ANDROID_HOME="$ANDROID_SDK_ROOT"
           fi
           if [ -z "$ANDROID_HOME" ]; then
-            echo "ANDROID_HOME 为空，尝试常见安装路径"
             for p in "$HOME/Android/Sdk" "$HOME/Library/Android/sdk" "$HOME/.android/sdk" /usr/local/lib/android/sdk; do
               if [ -d "$p" ]; then ANDROID_HOME="$p"; break; fi
             done
           fi
           echo "Using ANDROID_HOME=$ANDROID_HOME"
-          ls -la "$ANDROID_HOME"
           test -d "$ANDROID_HOME/platforms/android-34" && echo "platform android-34 OK" || echo "MISSING platform android-34"
           test -d "$ANDROID_HOME/build-tools/34.0.0" && echo "build-tools 34.0.0 OK" || echo "MISSING build-tools 34.0.0"
-          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$GRADLE_ROOT/local.properties"
           echo "--- local.properties ---"
-          cat local.properties
+          cat "$GRADLE_ROOT/local.properties"
 
       # 用独立 Gradle 8.4（与 gradle-wrapper.properties 一致），避免依赖 wrapper jar。
       - name: Install Gradle 8.4
@@ -65,14 +78,21 @@ jobs:
         run: |
           python3.12 --version || true
           python3 --version || true
-          python --version || true
 
-      # 把 gradle 输出写文件；失败时把「FAILURE / What went wrong」块**重新打印到日志末尾**，
-      # 这样即使只截屏日志底部也能看到真正的报错（不再被 --stacktrace 的框架栈淹没）。
-      - name: Build debug APK
+      # 构建 APK：仓库根存在 upload-keystore.jks 则打「已签名的 release 包」
+      # （私有签名不会被 Play Protect 当风险应用删除，可正常点按安装）；否则退回 debug 包。
+      # 失败时把「FAILURE / What went wrong」块重新打印到日志末尾，方便只截屏底部也能看到报错。
+      - name: Build APK
         run: |
           set +e
-          gradle assembleDebug --no-daemon --stacktrace > build.log 2>&1
+          if [ -f "$GRADLE_ROOT/upload-keystore.jks" ]; then
+            echo "[sign] keystore found -> building SIGNED release"
+            TASK=assembleRelease
+          else
+            echo "[sign] no keystore in repo -> building debug (unsigned)"
+            TASK=assembleDebug
+          fi
+          gradle -p "$GRADLE_ROOT" $TASK --no-daemon --stacktrace > build.log 2>&1
           rc=$?
           echo "===== FULL GRADLE LOG ====="
           cat build.log
@@ -88,6 +108,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: TwinCAT2Login-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: TwinCAT2Login-apk
+          path: '**/build/outputs/apk/**/*.apk'
           if-no-files-found: error
