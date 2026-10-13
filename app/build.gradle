@@ -9,8 +9,9 @@ android {
         applicationId "com.example.twincat2"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        // ★ 每次改动可递增，方便在手机上确认装的是新包（设置→应用→版本号）
+        versionCode 2
+        versionName "1.1"
 
         // ★ APK 文件名：输出由默认的 app-release.apk 改为 TwinCAT2Login-release.apk
         //   （debug 则对应 TwinCAT2Login-debug.apk）

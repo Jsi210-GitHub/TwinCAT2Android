@@ -3,6 +3,17 @@ package com.example.twincat2;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.List;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 /**
  * WebView <-> Python 桥接层（Route A）。
  *
@@ -110,14 +121,94 @@ public class JsBridge {
         }
     }
 
-    /** 枚举手机本机 IPv4 网段（基于 java.net.NetworkInterface，无 ipconfig）。 */
+    /**
+     * 枚举手机本机非回环、已启用网卡的 IPv4 网段。
+     * 优先用纯 Java（java.net.NetworkInterface，最可靠），失败再回退 Python 实现。
+     * 返回 {"ok":true,"subnets":[{iface,ip,net,count,kind}],"debug":"..."}
+     */
     @android.webkit.JavascriptInterface
     public String scan_subnets() {
+        try {
+            String j = scanSubnetsJava();
+            if (j != null) return j;
+        } catch (Exception e) {
+            // Java 枚举异常时回退到 Python 实现
+        }
         try {
             return bridgeModule().callAttr("scan_subnets").toString();
         } catch (Exception e) {
             return err(e);
         }
+    }
+
+    /** 纯 Java 枚举网卡：不跳过任何非回环网卡（含蜂窝），由 UI 标注类型。 */
+    private String scanSubnetsJava() throws Exception {
+        JSONArray arr = new JSONArray();
+        StringBuilder dbg = new StringBuilder();
+        LinkedHashMap<String, JSONObject> uniq = new LinkedHashMap<String, JSONObject>();
+        Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+        if (en == null) dbg.append("getNetworkInterfaces()=null");
+        while (en != null && en.hasMoreElements()) {
+            NetworkInterface ni = en.nextElement();
+            if (ni == null) continue;
+            String nm = ni.getName() == null ? "?" : ni.getName();
+            boolean up, loop;
+            try { up = ni.isUp(); } catch (Exception e) { up = false; }
+            try { loop = ni.isLoopback(); } catch (Exception e) { loop = false; }
+            List<InterfaceAddress> addrs = ni.getInterfaceAddresses();
+            if (addrs == null) { dbg.append(nm).append(": getInterfaceAddresses()=null | "); continue; }
+            for (InterfaceAddress ia : addrs) {
+                if (ia == null) continue;
+                InetAddress a = ia.getAddress();
+                if (a == null) continue;
+                String ip = a.getHostAddress();
+                int pfx = ia.getNetworkPrefixLength();
+                boolean v4 = a instanceof Inet4Address;
+                if (dbg.length() > 0) dbg.append(" | ");
+                dbg.append(nm).append(" ").append(ip).append(" /").append(pfx)
+                   .append(v4 ? " v4" : " v6")
+                   .append(up ? " up" : " down")
+                   .append(loop ? " loop" : "");
+                if (!v4 || ip == null || ip.startsWith("127.") || ip.indexOf(':') >= 0) continue;
+                if (loop || !up) continue;
+                if (pfx <= 0 || pfx > 32) continue;
+                byte[] raw = a.getAddress();
+                long v = 0;
+                for (int i = 0; i < 4 && i < raw.length; i++) {
+                    v = (v << 8) | (raw[i] & 0xFF);
+                }
+                long mask = (0xFFFFFFFFL << (32 - pfx)) & 0xFFFFFFFFL;
+                long netv = v & mask;
+                String net = ((netv >> 24) & 0xFF) + "." + ((netv >> 16) & 0xFF) + "."
+                           + ((netv >> 8) & 0xFF) + "." + (netv & 0xFF) + "/" + pfx;
+                long hostCount = (1L << (32 - pfx)) - 2;
+                if (hostCount < 0) hostCount = 0;
+                if (uniq.containsKey(net)) continue;
+                JSONObject o = new JSONObject();
+                o.put("iface", nm);
+                o.put("ip", ip);
+                o.put("net", net);
+                o.put("count", hostCount);
+                o.put("kind", kindOf(nm));
+                uniq.put(net, o);
+            }
+        }
+        for (JSONObject o : uniq.values()) arr.put(o);
+        JSONObject ret = new JSONObject();
+        ret.put("ok", true);
+        ret.put("subnets", arr);
+        ret.put("debug", dbg.toString());
+        return ret.toString();
+    }
+
+    private static String kindOf(String nm) {
+        String n = nm == null ? "" : nm.toLowerCase();
+        if (n.startsWith("wlan") || n.startsWith("ap") || n.contains("wifi")) return "wifi";
+        if (n.startsWith("eth") || n.startsWith("usb") || n.startsWith("rndis")) return "eth";
+        if (n.startsWith("rmnet") || n.startsWith("ccmni") || n.startsWith("pdp")
+                || n.startsWith("ppp") || n.startsWith("clat")) return "cell";
+        if (n.startsWith("tun") || n.startsWith("tap")) return "vpn";
+        return "other";
     }
 
     /** 对给定 CIDR 做 TCP 端口探测，返回在线设备列表（Android 无 ICMP，以端口命中判定在线）。 */

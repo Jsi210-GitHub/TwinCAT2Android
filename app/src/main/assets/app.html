@@ -78,7 +78,7 @@
       </div>
       <div id="scanStatus" class="muted" style="min-height:16px; margin-bottom:6px;"></div>
       <div id="scanList" style="max-height:180px; overflow:auto; border:1px solid #e5e7eb; border-radius:8px; padding:4px;"></div>
-      <div class="muted" style="margin-top:6px;">提示：Android 不支持 ICMP，改用 TCP 端口探测（80/443/48898 等）判定在线；标 ★ 的端口命中更可能是 PLC（ADS=倍福服务）。</div>
+      <div class="muted" style="margin-top:6px;">提示：请先让手机连到与 PLC 同一网段的网络（通常是同一 WiFi）；蜂窝网络（4G/5G）通常扫不到 PLC。Android 不支持 ICMP，改用 TCP 端口探测（80/443/48898 等）判定在线，标 ★ 的端口命中更可能是 PLC（ADS=倍福服务）。</div>
     </div>
 
     <div class="hint">可查看并修改 IP 设置 与 系统时间，不打开原始控制台</div>
@@ -333,18 +333,30 @@
         try { r = JSON.parse(Android.scan_subnets()); }
         catch(e){ document.getElementById('scanStatus').textContent = '获取网段失败：' + e; return; }
         var status = document.getElementById('scanStatus');
-        if(!r.ok){ status.textContent = r.msg; return; }
+        if(!r.ok){ status.textContent = r.msg || '获取网段失败'; return; }
+        var subs = r.subnets || [];
+        // WiFi/有线 优先，蜂窝最后
+        var pri = { wifi:0, eth:1, vpn:2, other:3, cell:4 };
+        var kindTxt = { wifi:'WiFi', eth:'有线', vpn:'VPN', other:'', cell:'蜂窝' };
+        subs.sort(function(a,b){
+          var pa = (pri[a.kind]==null?9:pri[a.kind]);
+          var pb = (pri[b.kind]==null?9:pri[b.kind]);
+          return pa - pb;
+        });
         var sel = document.getElementById('scanNet');
         sel.innerHTML = '';
-        (r.subnets||[]).forEach(function(s){
+        subs.forEach(function(s){
           var o = document.createElement('option');
           o.value = s.net;
-          o.textContent = s.iface + '  ' + s.ip + '  →  ' + s.net + '  (' + s.count + ' 地址)';
+          var kt = kindTxt[s.kind] || '';
+          o.textContent = s.iface + (kt?('['+kt+'] '):' ') + s.ip + '  →  ' + s.net + '  (' + s.count + ' 地址)';
           sel.appendChild(o);
         });
-        status.textContent = r.subnets.length
-          ? '已加载 ' + r.subnets.length + ' 个网段，点「扫描」开始'
-          : '未发现可用网卡/网段';
+        if(subs.length){
+          status.textContent = '已加载 ' + subs.length + ' 个网段，点「扫描」开始';
+        } else {
+          status.textContent = '未发现可用网卡/网段' + (r.debug ? ('｜本机接口：' + r.debug) : '');
+        }
       }, 30);
     } else {
       box.style.display = 'none';

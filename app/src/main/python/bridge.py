@@ -69,56 +69,76 @@ _SCAN_PORTS = [
 ]
 
 
+_KIND_WIFI = ("wlan", "ap", "wifi")
+_KIND_ETH = ("eth", "usb", "rndis")
+_KIND_CELL = ("rmnet", "ccmni", "pdp", "ppp", "clat")
+
+
+def _iface_kind(name):
+    n = (name or "").lower()
+    if n.startswith(_KIND_WIFI) or "wifi" in n:
+        return "wifi"
+    if n.startswith(_KIND_ETH):
+        return "eth"
+    if n.startswith(_KIND_CELL):
+        return "cell"
+    if n.startswith(("tun", "tap")):
+        return "vpn"
+    return "other"
+
+
 def get_subnets():
-    """枚举本机非回环、已启用网卡的 IPv4 网段，返回 [{iface,ip,net,count}]。"""
-    subs = []
+    """枚举本机所有非回环、已启用网卡的 IPv4 网段（含蜂窝），返回 (subs, debug)。
+
+    注意：不再按网卡名跳过蜂窝/拨号口 —— 否则手机只连蜂窝时列表会全空，
+    表现为“无法选择网卡 / 请先选择网段”。现在一律列出，由 UI 标注网络类型。
+    """
+    subs, dbg = [], []
     if not _HAS_JAVA_NET or NetworkInterface is None:
-        return subs
+        return subs, "java 网络接口不可用（Chaquopy java.net 导入失败）"
     try:
         enums = NetworkInterface.getNetworkInterfaces()
         if enums is None:
-            return subs
-        if Collections is not None:
-            ifaces = Collections.list(enums)
-        else:
-            ifaces = list(enums)
-    except Exception:
-        return subs
-    try:
-        for iface in ifaces:
+            return subs, "getNetworkInterfaces() 返回空"
+        ifaces = Collections.list(enums) if Collections is not None else list(enums)
+    except Exception as e:
+        return subs, "枚举网络接口失败：{}".format(e)
+    for iface in ifaces:
+        try:
+            name = iface.getName() or "?"
+            up = bool(iface.isUp())
+            loop = bool(iface.isLoopback())
+        except Exception:
+            continue
+        try:
+            addrs = iface.getInterfaceAddresses() or []
+        except Exception:
+            addrs = []
+        for ia in addrs:
             try:
-                if iface.isLoopback() or not iface.isUp():
-                    continue
+                addr = ia.getAddress()
+                ip = addr.getHostAddress()
+                is4 = isinstance(addr, Inet4Address)
+                prefix = int(ia.getNetworkPrefixLength())
+            except Exception as e:
+                dbg.append("{},?（{}）".format(name, e))
+                continue
+            dbg.append("{} {} /{} {}{}{}".format(
+                name, ip, prefix, "v4" if is4 else "v6",
+                " up" if up else " down", " loop" if loop else ""))
+            if not is4 or not ip or ip.startswith("127.") or ":" in ip:
+                continue
+            if loop or not up:
+                continue
+            if prefix <= 0 or prefix > 32:
+                continue
+            try:
+                net = ipaddress.ip_network("{}/{}".format(ip, prefix), strict=False)
+                subs.append({"iface": name, "ip": ip, "net": str(net),
+                             "count": max(0, net.num_addresses - 2),
+                             "kind": _iface_kind(name)})
             except Exception:
                 continue
-            name = iface.getName() or ""
-            # 跳过蜂窝/拨号/虚拟口：PLC 不会挂在这些网络，且可能网段很大
-            if any(name.startswith(p) for p in ("rmnet", "ppp", "cellular", "dummy")):
-                continue
-            try:
-                addrs = iface.getInterfaceAddresses()
-            except Exception:
-                continue
-            for ia in addrs:
-                try:
-                    addr = ia.getAddress()
-                    if not isinstance(addr, Inet4Address):
-                        continue
-                    ip = addr.getHostAddress()
-                    if not ip or ip.startswith("127.") or ":" in ip:
-                        continue
-                    prefix = ia.getNetworkPrefixLength()
-                    if not prefix or prefix <= 0 or prefix > 32:
-                        continue
-                    net = ipaddress.ip_network(
-                        "{}/{}".format(ip, int(prefix)), strict=False)
-                    cnt = max(0, net.num_addresses - 2)
-                    subs.append({"iface": name, "ip": ip,
-                                 "net": str(net), "count": cnt})
-                except Exception:
-                    continue
-    except Exception:
-        pass
     # 同一网段多别名去重
     seen, uniq = set(), []
     for s in subs:
@@ -126,7 +146,7 @@ def get_subnets():
             continue
         seen.add(s["net"])
         uniq.append(s)
-    return uniq
+    return uniq, " | ".join(dbg)
 
 
 def _tcp_open(ip, port, timeout=0.3):
@@ -291,8 +311,8 @@ class Api:
 
     def scan_subnets(self):
         try:
-            subs = get_subnets()
-            return {"ok": True, "subnets": subs}
+            subs, dbg = get_subnets()
+            return {"ok": True, "subnets": subs, "debug": dbg}
         except Exception as e:
             return {"ok": False, "msg": "获取网段失败：" + str(e)}
 
