@@ -7,12 +7,11 @@ import com.chaquo.python.Python;
  * WebView <-> Python 桥接层（Route A）。
  *
  * app.html 里的 JS 通过 window.Android.xxx(...) 调用本类方法；本类再把调用
- * 转发给 assets/app.html 同级协议层（Python 模块 bridge）。所有方法都返回
- * JSON 字符串，与 PC 版 twincat2_login 的约定一致。
+ * 转发给 Python 模块 bridge。所有方法都返回 JSON 字符串。
  *
- * 注意线程：@JavascriptInterface 方法运行在 WebView 内部线程（非 App 主线程），
- * 因此这里做阻塞式网络 I/O（Python mdp_client）不会触发主线程 ANR；app.html 又用
- * setTimeout(...,30) 先让「正在连接…」遮罩渲染出来，再发起阻塞调用，体验更顺。
+ * 关键：参数一律用「确定类型」声明（int / boolean / String / Integer），
+ * 不要声明成 Object。声明成 Object 时，WebView 会把 JS 数字按 Double 甚至
+ * Chaquopy 代理对象传过来，Python 端 int() 直接抛错 → 表现为“无效的网卡索引”。
  */
 public class JsBridge {
 
@@ -73,11 +72,11 @@ public class JsBridge {
     }
 
     /**
-     * JS 侧入参：idx(Number) / ip / subnet / gateway(String) / dhcp(Boolean)。
-     * 用 Object 接收，交给 Chaquopy 自动转成 Python 的 int / str / bool / None。
+     * idx 用 int、dhcp 用 boolean：让 WebView 直接把 JS 数字/布尔转成确定类型，
+     * 避免走 Object 时 Double/代理对象导致 Python int() 报错（“无效的网卡索引”）。
      */
     @android.webkit.JavascriptInterface
-    public String apply_nic(Object idx, Object ip, Object subnet, Object gateway, Object dhcp) {
+    public String apply_nic(int idx, String ip, String subnet, String gateway, boolean dhcp) {
         try {
             return bridgeModule()
                     .callAttr("apply_nic", idx, ip, subnet, gateway, dhcp)
@@ -88,11 +87,11 @@ public class JsBridge {
     }
 
     /**
-     * JS 侧入参：sntpServer(String) / sntpRefresh(Number|null) /
-     *              timezone(Number|null) / dtLocal(String|null)。
+     * sntpServer / dtLocal 是字符串；sntpRefresh / timezone 可为空（JS 传 null），
+     * 用 Integer（可空）接收，交给 Python 端 _as_int 规整。
      */
     @android.webkit.JavascriptInterface
-    public String apply_time(Object sntpServer, Object sntpRefresh, Object timezone, Object dtLocal) {
+    public String apply_time(String sntpServer, Integer sntpRefresh, Integer timezone, String dtLocal) {
         try {
             return bridgeModule()
                     .callAttr("apply_time", sntpServer, sntpRefresh, timezone, dtLocal)
