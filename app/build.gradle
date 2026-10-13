@@ -12,6 +12,10 @@ android {
         versionCode 1
         versionName "1.0"
 
+        // ★ APK 文件名：输出由默认的 app-release.apk 改为 TwinCAT2Login-release.apk
+        //   （debug 则对应 TwinCAT2Login-debug.apk）
+        archivesBaseName = "TwinCAT2Login"
+
         // Python 3.12 起 Chaquopy 只支持 64 位 ABI（armeabi-v7a / x86 已移除）
         ndk {
             abiFilters "arm64-v8a", "x86_64"
