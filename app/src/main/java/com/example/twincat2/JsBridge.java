@@ -16,6 +16,12 @@ import com.chaquo.python.Python;
  */
 public class JsBridge {
 
+    private final MainActivity activity;
+
+    public JsBridge(MainActivity activity) {
+        this.activity = activity;
+    }
+
     /** 统一把异常包成桥接层可识别的 JSON 错误，避免 JS 侧 JSON.parse 抛错。 */
     private String err(Exception e) {
         String m = e != null && e.getMessage() != null ? e.getMessage() : "unknown";
