@@ -93,12 +93,11 @@ class Api:
         if not self.client:
             return {"ok": False, "msg": "未连接"}
         try:
-            # 来自 WebView 桥接时，JS 数字可能是 Integer/Double，null 是 None，
-            # 统一规整为 int，避免 mdp_client 写出异常类型。
+            # 来自 WebView 桥接时，JS 数字可能是 Integer/Double/None，统一规整为 int
             if sntp_refresh is not None:
-                sntp_refresh = int(sntp_refresh)
+                sntp_refresh = _as_int(sntp_refresh)
             if timezone is not None:
-                timezone = int(timezone)
+                timezone = _as_int(timezone)
             text_dt = None
             if dt_local:
                 bias = "+08:00"
@@ -125,12 +124,17 @@ class Api:
     def apply_nic(self, idx, ip, subnet, gateway, dhcp):
         if not self.client:
             return {"ok": False, "msg": "未连接"}
-        try:
-            idx = int(idx)
-        except (TypeError, ValueError):
-            return {"ok": False, "msg": "无效的网卡索引"}
-        if idx < 0 or idx >= len(self.nic_mods):
-            return {"ok": False, "msg": "无效的网卡索引"}
+        # 自愈：异常时序下模块列表可能为空，按需重读，避免“无效的网卡索引”
+        if not self.nic_mods:
+            try:
+                self.nic_mods = self.client.nic_modules()
+                self.nic_data = self.client.read_all_nic()
+            except Exception:
+                pass
+        idx = _as_int(idx)
+        if idx is None or idx < 0 or idx >= len(self.nic_mods):
+            return {"ok": False,
+                    "msg": "无效的网卡索引（idx={0}, 可用网卡数={1}）".format(idx, len(self.nic_mods))}
         name = ""
         if 0 <= idx < len(self.nic_data):
             name = self.nic_data[idx].get("name", "")
@@ -186,6 +190,33 @@ def _wrap(fn):
         return _j(fn())
     except Exception as e:
         return _j({"ok": False, "msg": "Python 异常：" + str(e)})
+
+
+def _as_int(v, default=None):
+    """把来自 WebView 桥接的各种形态（int/float/str/None/NaN）统一转成 int。
+
+    WebView 经 Java 桥接传来的数字可能是 Java int/Double，也可能在极端情况下是
+    Chaquopy 代理对象；这里逐一兜底，转不出就返回 default，避免 int() 抛错。"""
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, float):
+        if v != v:  # NaN
+            return default
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return default
+        try:
+            return int(s)
+        except ValueError:
+            return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def get_last():
