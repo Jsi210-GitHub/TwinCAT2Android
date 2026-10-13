@@ -1,0 +1,216 @@
+# -*- coding: utf-8 -*-
+"""Android 端 PLC 配置桥接层（Route A）。
+
+复用 mdp_client 协议栈，把 PC 版 twincat2_login.py 的 Api 逻辑搬到手机端，
+通过 addJavascriptInterface 供 app.html 的 JS 调用。所有方法都返回 JSON 字符串。
+"""
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mdp_client  # noqa: E402
+
+USER = "Administrator"
+PASS = "1"
+
+
+def _to_iso8601(dt_local, bias="+08:00"):
+    dt_local = (dt_local or "").strip()
+    if "T" not in dt_local:
+        return None
+    d, tpart = dt_local.split("T", 1)
+    parts = tpart.split(":")
+    if len(parts) == 2:
+        tpart = tpart + ":00"
+    if "." not in tpart:
+        tpart = tpart + ".000"
+    return "{0}T{1}{2}".format(d, tpart, bias)
+
+
+def is_valid_target(s):
+    s = s.strip()
+    if not s:
+        return False
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s):
+        return all(0 <= int(p) <= 255 for p in s.split("."))
+    return bool(re.match(r"^[a-zA-Z0-9\-\.]+$", s))
+
+
+class Api:
+    def __init__(self):
+        self.client = None
+        self.nic_mods = []
+        self.nic_data = []
+        self.time_mod = None
+        self.last_time = None
+        self.last_ip = ""  # 记住最近一次成功连接的 IP，供 UI 预填
+
+    def connect(self, ip, user=None, pw=None):
+        if not is_valid_target(ip):
+            return {"ok": False, "msg": "IP 地址 / 主机名格式不正确"}
+        user = user or USER
+        pw = pw if pw else PASS
+        try:
+            c = mdp_client.MdpClient(ip, user, pw)
+            nics = c.read_all_nic()
+            t = c.read_time()
+            if not nics and not t:
+                return {"ok": False, "msg": "未读取到任何模块参数（设备可能不支持）"}
+            self.client = c
+            self.nic_mods = c.nic_modules()
+            self.nic_data = nics
+            self.time_mod = c.find_module(mdp_client.TYPE_TIME)
+            self.last_time = t
+            self.last_ip = ip
+            return {"ok": True, "nics": nics, "time": t}
+        except Exception as e:
+            return {"ok": False, "msg": "连接失败：{}".format(e)}
+
+    def refresh(self):
+        if not self.client:
+            return {"ok": False, "msg": "未连接"}
+        try:
+            nics = self.client.read_all_nic()
+            t = self.client.read_time()
+            self.last_time = t
+            self.nic_data = nics
+            return {"ok": True, "nics": nics, "time": t}
+        except Exception as e:
+            return {"ok": False, "msg": "刷新失败：{}".format(e)}
+
+    def current_time(self):
+        if not self.client or self.time_mod is None:
+            return {"ok": False, "text_datetime": None}
+        try:
+            t = self.client.read_time(self.time_mod, with_timezones=False)
+            return {"ok": True, "text_datetime": t.get("text_datetime")}
+        except Exception:
+            return {"ok": False, "text_datetime": None}
+
+    def apply_time(self, sntp_server, sntp_refresh, timezone, dt_local=None):
+        if not self.client:
+            return {"ok": False, "msg": "未连接"}
+        try:
+            # 来自 WebView 桥接时，JS 数字可能是 Integer/Double，null 是 None，
+            # 统一规整为 int，避免 mdp_client 写出异常类型。
+            if sntp_refresh is not None:
+                sntp_refresh = int(sntp_refresh)
+            if timezone is not None:
+                timezone = int(timezone)
+            text_dt = None
+            if dt_local:
+                bias = "+08:00"
+                if self.last_time and self.last_time.get("text_datetime"):
+                    m = re.search(r"([+-]\d{2}:\d{2})", self.last_time["text_datetime"])
+                    if m:
+                        bias = m.group(1)
+                text_dt = self._to_iso8601(dt_local, bias)
+                if not text_dt:
+                    return {"ok": False, "msg": "系统日期时间格式不正确"}
+            codes = self.client.write_time(
+                self.time_mod,
+                sntp_server=sntp_server or None,
+                sntp_refresh=sntp_refresh,
+                timezone=timezone,
+                text_datetime=text_dt,
+            )
+            if all(code == 0 for code in codes):
+                return {"ok": True, "msg": "系统时间设置已写入设备"}
+            return {"ok": False, "msg": "写入返回错误码：{}".format(codes)}
+        except Exception as e:
+            return {"ok": False, "msg": "写入失败：{}".format(e)}
+
+    def apply_nic(self, idx, ip, subnet, gateway, dhcp):
+        if not self.client:
+            return {"ok": False, "msg": "未连接"}
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            return {"ok": False, "msg": "无效的网卡索引"}
+        if idx < 0 or idx >= len(self.nic_mods):
+            return {"ok": False, "msg": "无效的网卡索引"}
+        name = ""
+        if 0 <= idx < len(self.nic_data):
+            name = self.nic_data[idx].get("name", "")
+        if name.strip().upper().endswith("X2"):
+            return {"ok": False,
+                    "msg": "X2 网口为当前连接网口，禁止修改（仅 X1 网口可修改）"}
+        mod = self.nic_mods[idx]
+        if dhcp:
+            codes = self.client.write_nic(mod, dhcp=True)
+            if not all(code == 0 for code in codes):
+                return {"ok": False, "msg": "DHCP 写入返回错误码：{}".format(codes)}
+            return self._renew_and_report(mod, "已启用 DHCP（静态地址将被忽略）")
+        code = self.client.write_nic_service(mod, ip or "", subnet or "", gateway or "")
+        if code != 0:
+            return {"ok": False, "msg": "IP 写入返回错误码：0x{:08X}".format(code & 0xFFFFFFFF)}
+        return self._renew_and_report(mod, "静态 IP 已写入")
+
+    def _renew_and_report(self, mod, base_msg):
+        try:
+            rc = self.client.write_nic_renew(mod)
+        except Exception as e:
+            return {"ok": True,
+                    "msg": base_msg + "，但网卡释放/续订调用异常（{}），可能仍需重启才能生效".format(e)}
+        if rc == 0:
+            return {"ok": True,
+                    "msg": base_msg + "，并已执行网卡释放/续订，新设置已立即生效（无需断电重启）"}
+        return {"ok": True,
+                "msg": base_msg + "，但网卡释放/续订返回 0x{:08X}，可能仍需重启才能生效".format(rc & 0xFFFFFFFF)}
+
+    def disconnect(self):
+        self.client = None
+        self.nic_mods = []
+        self.time_mod = None
+        return {"ok": True}
+
+
+_api = None
+
+
+def get_api():
+    global _api
+    if _api is None:
+        _api = Api()
+    return _api
+
+
+def _j(obj):
+    return json.dumps(obj, separators=(',', ':'))
+
+
+def _wrap(fn):
+    try:
+        return _j(fn())
+    except Exception as e:
+        return _j({"ok": False, "msg": "Python 异常：" + str(e)})
+
+
+def get_last():
+    return get_api().last_ip
+
+
+def connect(ip):
+    return _wrap(lambda: get_api().connect(ip))
+
+
+def refresh():
+    return _wrap(get_api().refresh)
+
+
+def current_time():
+    return _wrap(get_api().current_time)
+
+
+def apply_nic(idx, ip, subnet, gateway, dhcp):
+    return _wrap(lambda: get_api().apply_nic(idx, ip, subnet, gateway, dhcp))
+
+
+def apply_time(sntp_server, sntp_refresh, timezone, dt_local):
+    return _wrap(lambda: get_api().apply_time(sntp_server, sntp_refresh, timezone, dt_local))
+
+
+def disconnect():
+    return _wrap(get_api().disconnect)
