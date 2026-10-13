@@ -109,4 +109,24 @@ public class JsBridge {
             return err(e);
         }
     }
+
+    /** 枚举手机本机 IPv4 网段（基于 java.net.NetworkInterface，无 ipconfig）。 */
+    @android.webkit.JavascriptInterface
+    public String scan_subnets() {
+        try {
+            return bridgeModule().callAttr("scan_subnets").toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    /** 对给定 CIDR 做 TCP 端口探测，返回在线设备列表（Android 无 ICMP，以端口命中判定在线）。 */
+    @android.webkit.JavascriptInterface
+    public String scan(String net) {
+        try {
+            return bridgeModule().callAttr("scan", net).toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
 }
