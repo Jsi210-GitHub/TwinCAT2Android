@@ -59,6 +59,14 @@ android {
             }
         }
     }
+
+    // ★ APK 文件名加时间戳，避免多次构建同名文件混淆（如 TwinCAT2Login-20261013-171325.apk）
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            def ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date())
+            output.outputFileName = "TwinCAT2Login-${ts}.apk"
+        }
+    }
 }
 
 dependencies {
