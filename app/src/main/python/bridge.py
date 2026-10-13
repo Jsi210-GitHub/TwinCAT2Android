@@ -12,6 +12,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mdp_client  # noqa: E402
 
+import ipaddress
+import socket
+from concurrent.futures import ThreadPoolExecutor
+
+try:
+    from java.net import NetworkInterface, Inet4Address
+    from java.util import Collections
+    _HAS_JAVA_NET = True
+except Exception:
+    NetworkInterface = None
+    Inet4Address = None
+    Collections = None
+    _HAS_JAVA_NET = False
+
 USER = "Administrator"
 PASS = "1"
 
@@ -36,6 +50,111 @@ def is_valid_target(s):
     if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s):
         return all(0 <= int(p) <= 255 for p in s.split("."))
     return bool(re.match(r"^[a-zA-Z0-9\-\.]+$", s))
+
+
+# ---------------------------------------------------------------------------
+# 网段扫描（Android 适配版）
+# ---------------------------------------------------------------------------
+# 与 PC 版不同：Android 没有 ipconfig / 不支持 ICMP ping，因此
+#   1) 获取本机网段：用 java.net.NetworkInterface 取 IPv4 地址 + 子网前缀长度 → CIDR
+#   2) 在线判定：并行 TCP 端口探测（80/443/48898 ADS 等），命中端口即视为在线
+# 纯端口探测可能漏掉「无任何开放端口」的设备，但对发现 PLC（必备 48898 ADS）足够。
+_SCAN_PORTS = [
+    (48898, "ADS"),
+    (80, "Web"),
+    (443, "HTTPS"),
+    (502, "Modbus"),
+    (22, "SSH"),
+    (8080, "HTTP-alt"),
+]
+
+
+def get_subnets():
+    """枚举本机非回环、已启用网卡的 IPv4 网段，返回 [{iface,ip,net,count}]。"""
+    subs = []
+    if not _HAS_JAVA_NET or NetworkInterface is None:
+        return subs
+    try:
+        enums = NetworkInterface.getNetworkInterfaces()
+        if enums is None:
+            return subs
+        if Collections is not None:
+            ifaces = Collections.list(enums)
+        else:
+            ifaces = list(enums)
+    except Exception:
+        return subs
+    try:
+        for iface in ifaces:
+            try:
+                if iface.isLoopback() or not iface.isUp():
+                    continue
+            except Exception:
+                continue
+            name = iface.getName() or ""
+            # 跳过蜂窝/拨号/虚拟口：PLC 不会挂在这些网络，且可能网段很大
+            if any(name.startswith(p) for p in ("rmnet", "ppp", "cellular", "dummy")):
+                continue
+            try:
+                addrs = iface.getInterfaceAddresses()
+            except Exception:
+                continue
+            for ia in addrs:
+                try:
+                    addr = ia.getAddress()
+                    if not isinstance(addr, Inet4Address):
+                        continue
+                    ip = addr.getHostAddress()
+                    if not ip or ip.startswith("127.") or ":" in ip:
+                        continue
+                    prefix = ia.getNetworkPrefixLength()
+                    if not prefix or prefix <= 0 or prefix > 32:
+                        continue
+                    net = ipaddress.ip_network(
+                        "{}/{}".format(ip, int(prefix)), strict=False)
+                    cnt = max(0, net.num_addresses - 2)
+                    subs.append({"iface": name, "ip": ip,
+                                 "net": str(net), "count": cnt})
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # 同一网段多别名去重
+    seen, uniq = set(), []
+    for s in subs:
+        if s["net"] in seen:
+            continue
+        seen.add(s["net"])
+        uniq.append(s)
+    return uniq
+
+
+def _tcp_open(ip, port, timeout=0.3):
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def scan_subnet(net_cidr):
+    """对给定 CIDR 并行 TCP 端口探测，返回在线设备 [{"ip","tags"}]（按 IP 升序）。"""
+    net = ipaddress.ip_network(net_cidr, strict=False)
+    hosts = [str(h) for h in net.hosts()]
+
+    def probe(ip):
+        tags = []
+        for port, tag in _SCAN_PORTS:
+            if _tcp_open(ip, port, 0.3):
+                tags.append(tag)
+        return {"ip": ip, "tags": tags}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=120) as ex:
+        results = list(ex.map(probe, hosts))
+    online = [r for r in results if r["tags"]]
+    online.sort(key=lambda d: int(ipaddress.ip_address(d["ip"])))
+    return online
 
 
 class Api:
@@ -170,6 +289,27 @@ class Api:
         self.time_mod = None
         return {"ok": True}
 
+    def scan_subnets(self):
+        try:
+            subs = get_subnets()
+            return {"ok": True, "subnets": subs}
+        except Exception as e:
+            return {"ok": False, "msg": "获取网段失败：" + str(e)}
+
+    def scan(self, net_cidr):
+        try:
+            if not net_cidr or "/" not in net_cidr:
+                return {"ok": False, "msg": "请选择有效的网段（CIDR）"}
+            net = ipaddress.ip_network(net_cidr, strict=False)
+            n = net.num_addresses
+            if n - 2 > 2048:
+                return {"ok": False,
+                        "msg": "网段过大（约 {} 个地址），请选择更小的网段".format(n - 2)}
+            online = scan_subnet(net_cidr)
+            return {"ok": True, "net": str(net), "online": online}
+        except Exception as e:
+            return {"ok": False, "msg": "扫描失败：" + str(e)}
+
 
 _api = None
 
@@ -245,3 +385,11 @@ def apply_time(sntp_server, sntp_refresh, timezone, dt_local):
 
 def disconnect():
     return _wrap(get_api().disconnect)
+
+
+def scan_subnets():
+    return _wrap(get_api().scan_subnets)
+
+
+def scan(net):
+    return _wrap(lambda: get_api().scan(net))
