@@ -23,7 +23,6 @@ import md4_patch  # noqa: E402  (patches hashlib for NTLM)
 import base64
 import struct
 import re
-import socket  # noqa: E402
 import http.client  # noqa: E402
 from ntlm_auth.ntlm import NtlmContext  # noqa: E402
 
@@ -33,6 +32,7 @@ WRITE_IG = 0xF081
 
 TYPE_NIC = 2
 TYPE_TIME = 3
+TYPE_CONNECTIVITY = 8   # Device Manager「Connectivity」模块：暴露本机 AMS NetId + TwinCAT 路由表
 TYPE_DISPLAY = 19
 
 
@@ -231,6 +231,25 @@ class MdpClient:
     def read_all_nic(self):
         return [self.read_nic(m) for m in self.nic_modules()]
 
+    # --- Connectivity (Router / AMS NetId) ----------------------------------
+    def read_ams_net_id(self, mod=None):
+        """读取设备本机 AMS NetId（Device Manager「Connectivity」页的 AMS Net Id 一栏）。
+
+        位于 CONNECTIVITY 模块（type=8）的 property 块：mdp_offset(P+1, 4)。
+        该值即设备真实 AMS 地址（如 10.10.24.27.1.1），与连接 IP 无关。
+        读不到返回 None。
+        """
+        if mod is None:
+            mod = self.find_module(TYPE_CONNECTIVITY)
+        if mod is None:
+            return None
+        P = mod["props"]
+        r = self.read([(mdp_offset(P + 1, 4), 128)])[0]
+        if not r:
+            return None
+        s = cstr(r)
+        return s or None
+
     def write_nic_service(self, mod, ip, subnet, gateway):
         """Set NIC IPv4/Subnet/Gateway via the Set_IpAndSubnet ServiceTransfer.
 
@@ -345,59 +364,6 @@ class MdpClient:
         if text_datetime is not None:
             writes.append((mdp_offset(P + 1, 4), cstr_to_buf(text_datetime, 128)))
         return self.write(writes)
-
-
-def read_ams_net_id(host, port=48898, timeout=2.0):
-    """通过 ADS-over-TCP 读取设备真实 AMS NetId（权威值，不依赖 IP 推导）。
-
-    向设备 ADS 端口(48898)发一条 AMS 请求，设备响应的 AMS 头「源 NetId」字段即其自身
-    AMS NetId —— 这才是设备配置里真正的地址（可能与连接 IP 无关，例如 10.10.24.27.1.1）。
-    请求目标 NetId 先用 <host>.1.1（该网卡接口的本地址别名，设备必响应），失败再试
-    0.0.0.0.0.0（部分版本作为「本机」通配），从而绕开「未知目标 NetId」的鸡生蛋问题。
-    返回 'a.b.c.d.e.f' 字符串；失败返回 None。
-    """
-    def nb(s):
-        return bytes(int(x) for x in s.split("."))
-
-    candidates = []
-    try:
-        candidates.append(nb(host + ".1.1"))
-    except Exception:
-        pass
-    candidates.append(b"\x00\x00\x00\x00\x00\x00")  # 0.0.0.0.0.0
-    src = b"\x00\x00\x00\x00\x00\x00"
-    for target in candidates:
-        try:
-            s = socket.create_connection((host, port), timeout=timeout)
-        except Exception:
-            continue
-        try:
-            s.settimeout(timeout)
-            # AMS/TCP 头(32B)：目标NetId(6) 目标端口(2) 源NetId(6) 源端口(2)
-            #   命令(2)=0x0001 ReadDeviceInfo 状态标志(2)=0 数据长度(4)=0 错误码(4)=0 invoke(4)=1
-            hdr = (target + struct.pack("<H", 10000)
-                   + src + struct.pack("<H", 32905)
-                   + struct.pack("<H", 0x0001) + struct.pack("<H", 0)
-                   + struct.pack("<I", 0) + struct.pack("<I", 0)
-                   + struct.pack("<I", 1))
-            s.sendall(hdr)
-            resp = b""
-            while len(resp) < 32:
-                chunk = s.recv(32 - len(resp))
-                if not chunk:
-                    break
-                resp += chunk
-            if len(resp) >= 14:
-                # 源 NetId 在 AMS 头偏移 8..13
-                return ".".join(str(b) for b in resp[8:14])
-        except Exception:
-            pass
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
-    return None
 
 
 if __name__ == "__main__":

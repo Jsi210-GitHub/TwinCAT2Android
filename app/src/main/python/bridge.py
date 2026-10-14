@@ -53,18 +53,6 @@ def is_valid_target(s):
     return bool(re.match(r"^[a-zA-Z0-9\-\.]+$", s))
 
 
-def get_ams_net_id(ip):
-    """读取设备真实 AMS NetId（经 ADS，权威值），失败返回 None。
-
-    不再按 IP 推导：AMS NetId 是设备独立配置的身份地址，可能完全不同于连接 IP
-    （例如 10.10.24.27.1.1）。实际由 mdp_client.read_ams_net_id 通过 ADS 端口读取。
-    """
-    s = (ip or "").strip()
-    if not s:
-        return None
-    return mdp_client.read_ams_net_id(s)
-
-
 # ---------------------------------------------------------------------------
 # 最近连接历史（持久化到 App 私有目录）
 # ---------------------------------------------------------------------------
@@ -270,7 +258,10 @@ class Api:
             self.time_mod = c.find_module(mdp_client.TYPE_TIME)
             self.last_time = t
             self.add_history(ip)
-            self.ams_net_id = get_ams_net_id(ip)
+            try:
+                self.ams_net_id = c.read_ams_net_id()
+            except Exception:
+                self.ams_net_id = None
             return {"ok": True, "nics": nics, "time": t, "ams_net_id": self.ams_net_id}
         except Exception as e:
             return {"ok": False, "msg": "连接失败：{}".format(e)}
