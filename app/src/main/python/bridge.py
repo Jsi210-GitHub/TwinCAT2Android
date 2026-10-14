@@ -53,6 +53,23 @@ def is_valid_target(s):
     return bool(re.match(r"^[a-zA-Z0-9\-\.]+$", s))
 
 
+def derive_ams_net_id(ip):
+    """根据目标推导 PLC 自身 AMS NetId。
+
+    Beckhoff 约定（与本项目 TwinCAT ADS 经验一致）：设备主 AMS 地址 = 其 IPv4 地址 + '.1.1'
+    （System Service / 主 AMS 端口）。目标为 IPv4 直接推导；主机名先解析再推导；
+    无法推导返回 None。MDP 协议本身不暴露 AMS NetId，这里按约定计算（对 TwinCAT 2 CE 设备恒成立）。
+    """
+    s = (ip or "").strip()
+    if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s):
+        return s + ".1.1"
+    try:
+        host_ip = socket.gethostbyname(s)
+        return host_ip + ".1.1"
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 最近连接历史（持久化到 App 私有目录）
 # ---------------------------------------------------------------------------
@@ -239,6 +256,7 @@ class Api:
         self.time_mod = None
         self.last_time = None
         self.history = _load_history()  # 最近连接历史，持久化到 App 私有目录
+        self.ams_net_id = None  # 设备 AMS NetId（按 IP 推导），供界面显示
 
     def connect(self, ip, user=None, pw=None):
         if not is_valid_target(ip):
@@ -257,7 +275,8 @@ class Api:
             self.time_mod = c.find_module(mdp_client.TYPE_TIME)
             self.last_time = t
             self.add_history(ip)
-            return {"ok": True, "nics": nics, "time": t}
+            self.ams_net_id = derive_ams_net_id(ip)
+            return {"ok": True, "nics": nics, "time": t, "ams_net_id": self.ams_net_id}
         except Exception as e:
             return {"ok": False, "msg": "连接失败：{}".format(e)}
 
@@ -269,7 +288,7 @@ class Api:
             t = self.client.read_time()
             self.last_time = t
             self.nic_data = nics
-            return {"ok": True, "nics": nics, "time": t}
+            return {"ok": True, "nics": nics, "time": t, "ams_net_id": self.ams_net_id}
         except Exception as e:
             return {"ok": False, "msg": "刷新失败：{}".format(e)}
 

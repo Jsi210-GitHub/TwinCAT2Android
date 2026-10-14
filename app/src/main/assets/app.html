@@ -54,6 +54,8 @@
   .topbar h1 { font-size:18px; margin:0; }
   .topbar .spacer { flex:1; }
   .topbar .ip { font-size:12px; color:#6b7280; }
+  .topbar .amsid { background:#eef2ff; color:#324cbb; border:1px solid #dbe2ff;
+                   border-radius:999px; padding:2px 10px; font-weight:500; }
   .panel { background:#fff; border-radius:16px; box-shadow:0 4px 16px rgba(0,0,0,.06);
            border:1px solid #eef2f7; padding:18px 20px; margin-bottom:18px; }
   .panel h3 { font-size:15px; margin:0 0 14px; padding-bottom:8px;
@@ -114,6 +116,7 @@
     <div class="topbar">
       <h1>设备配置</h1>
       <span class="ip" id="devip"></span>
+      <span class="ip amsid" id="amsid"></span>
       <span class="spacer"></span>
       <button class="sec" id="refresh">刷新</button>
       <button class="sec" id="back">断开</button>
@@ -188,6 +191,7 @@
       if(!r.ok){ showErr(r.msg); return; }
       STATE.nics = r.nics; STATE.time = r.time; STATE.tz = r.time.timezones || [];
       document.getElementById('devip').textContent = '设备：' + ip;
+      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : '';
       buildNic(); buildTime();
       document.getElementById('login').style.display = 'none';
       document.getElementById('dash').style.display = 'block';
@@ -293,6 +297,7 @@
         return;
       }
       STATE.nics = r.nics; STATE.time = r.time; STATE.tz = r.time.timezones || [];
+      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : '';
       fillNic(); buildTime();
     }, 30);
   }
