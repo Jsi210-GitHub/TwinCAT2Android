@@ -191,7 +191,7 @@
       if(!r.ok){ showErr(r.msg); return; }
       STATE.nics = r.nics; STATE.time = r.time; STATE.tz = r.time.timezones || [];
       document.getElementById('devip').textContent = '设备：' + ip;
-      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : '';
+      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : 'AMS NetId：读取失败';
       buildNic(); buildTime();
       document.getElementById('login').style.display = 'none';
       document.getElementById('dash').style.display = 'block';
@@ -297,7 +297,7 @@
         return;
       }
       STATE.nics = r.nics; STATE.time = r.time; STATE.tz = r.time.timezones || [];
-      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : '';
+      document.getElementById('amsid').textContent = r.ams_net_id ? ('AMS NetId：' + r.ams_net_id) : 'AMS NetId：读取失败';
       fillNic(); buildTime();
     }, 30);
   }
