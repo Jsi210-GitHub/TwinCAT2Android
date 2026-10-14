@@ -12,7 +12,8 @@
   }
   .wrap { max-width: 980px; margin: 0 auto; padding: 18px 22px 40px; }
   .card {
-    background:#fff; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.08);
+    background:#fff; border-radius:16px; box-shadow:0 6px 24px rgba(0,0,0,.08);
+    border:1px solid #eef2f7;
     padding: 26px; width: 380px; margin: 14vh auto;
   }
   h2 { font-size:18px; margin:0 0 4px; }
@@ -33,6 +34,18 @@
   button.sec:hover { background:#d1d5db; }
   button:disabled { background:#cbd5e1 !important; color:#fff; cursor:not-allowed; }
   .hint { font-size:12px; color:#9ca3af; margin-top:14px; text-align:center; }
+  .recent { margin-top:18px; border-top:1px solid #eef2f7; padding-top:14px; }
+  .recent-head { font-size:13px; color:#374151; font-weight:500; margin-bottom:8px; }
+  .hist-item { display:flex; align-items:center; justify-content:space-between;
+    height:44px; padding:0 10px; border:1px solid #eef2f7; border-radius:10px;
+    margin-bottom:8px; cursor:pointer; transition:background .15s, border-color .15s; }
+  .hist-item:hover { background:#f5f8ff; border-color:#dbe4ff; }
+  .hist-ip { font-size:14px; font-weight:500; color:#1f2937; }
+  .hist-del { font-size:18px; line-height:1; color:#9ca3af; padding:0 6px; cursor:pointer; }
+  .hist-del:hover { color:#dc2626; }
+  .recent-actions { display:flex; gap:10px; margin-top:6px; }
+  .recent-actions button { flex:1; }
+  #historyEmpty { font-size:12px; color:#9ca3af; margin:4px 0 10px; }
   .brand-footer { margin-top:16px; padding-top:12px; border-top:1px solid #f0f0f2;
                   text-align:center; font-size:12px; color:#a0a0a6; letter-spacing:.3px; }
   .brand-footer span { color:#6b7280; font-weight:500; }
@@ -41,8 +54,8 @@
   .topbar h1 { font-size:18px; margin:0; }
   .topbar .spacer { flex:1; }
   .topbar .ip { font-size:12px; color:#6b7280; }
-  .panel { background:#fff; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,.06);
-           padding:18px 20px; margin-bottom:18px; }
+  .panel { background:#fff; border-radius:16px; box-shadow:0 4px 16px rgba(0,0,0,.06);
+           border:1px solid #eef2f7; padding:18px 20px; margin-bottom:18px; }
   .panel h3 { font-size:15px; margin:0 0 14px; padding-bottom:8px;
               border-bottom:1px solid #eef2f7; color:#111827; }
   .grid { display:grid; grid-template-columns: 120px 1fr; row-gap:12px; column-gap:14px; align-items:center; }
@@ -70,7 +83,17 @@
     <input id="ip" type="text" placeholder="例如 10.10.8.165" autocomplete="off">
     <div class="err" id="err"></div>
     <button id="go" style="width:100%">连 接 设 备</button>
-    <button id="scanBtn" class="sec" type="button" style="width:100%; margin-top:10px;">扫描网段</button>
+
+    <!-- 最近连接 -->
+    <div class="recent">
+      <div class="recent-head">最近连接</div>
+      <div id="historyList"></div>
+      <div id="historyEmpty">暂无历史连接，连接成功后自动记录</div>
+      <div class="recent-actions">
+        <button id="clearHist" class="sec" type="button">清空历史</button>
+        <button id="scanBtn" class="sec" type="button">扫描网段 ▾</button>
+      </div>
+    </div>
 
     <!-- 网段扫描 -->
     <div id="scanBox" style="display:none; margin-top:14px;">
@@ -306,6 +329,7 @@
     document.getElementById('dash').style.display='none';
     document.getElementById('login').style.display='block';
     Android.disconnect();
+    renderHistory();
   }
 
   var clockTimer = null;
@@ -321,8 +345,41 @@
   window.addEventListener('load', function(){
     var last = Android.get_last();
     if(last && last !== 'null' && last !== 'None' && last.length) document.getElementById('ip').value = last;
+    renderHistory();
     document.getElementById('ip').focus();
   });
+
+  // 最近连接历史：渲染列表，点击项直连，× 删除单项
+  function renderHistory(){
+    var list = document.getElementById('historyList');
+    var empty = document.getElementById('historyEmpty');
+    list.innerHTML = '';
+    var hist;
+    try { hist = JSON.parse(Android.get_history()); } catch(e){ hist = []; }
+    if(!hist || !hist.length){ empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    hist.forEach(function(item){
+      var ip = (item && typeof item === 'object') ? item.ip : item;
+      var row = document.createElement('div');
+      row.className = 'hist-item';
+      var left = document.createElement('span');
+      left.className = 'hist-ip'; left.textContent = ip;
+      var del = document.createElement('span');
+      del.className = 'hist-del'; del.textContent = '×';
+      del.onclick = function(ev){ ev.stopPropagation(); delHistory(ip); };
+      row.appendChild(left); row.appendChild(del);
+      row.onclick = function(){ document.getElementById('ip').value = ip; go(); };
+      list.appendChild(row);
+    });
+  }
+  function delHistory(ip){
+    try { JSON.parse(Android.del_history(ip)); } catch(e){}
+    renderHistory();
+  }
+  function clearHistory(){
+    try { JSON.parse(Android.clear_history()); } catch(e){}
+    renderHistory();
+  }
   // 网段扫描：展开面板并加载本机网段列表（Android 用 window.Android 同步调用）
   function openScan(){
     var box = document.getElementById('scanBox');
@@ -407,6 +464,7 @@
   document.getElementById('back').addEventListener('click', back);
   document.getElementById('scanBtn').addEventListener('click', openScan);
   document.getElementById('scanRun').addEventListener('click', runScan);
+  document.getElementById('clearHist').addEventListener('click', clearHistory);
 </script>
 </body>
 </html>

@@ -30,6 +30,13 @@ public class JsBridge {
 
     public JsBridge(MainActivity activity) {
         this.activity = activity;
+        // 把 App 私有 files 目录传给 Python，用于持久化「最近连接」历史（跨 App 重启保留）。
+        try {
+            Python py = Python.getInstance();
+            py.getModule("bridge").callAttr("set_data_dir", activity.getFilesDir().getAbsolutePath());
+        } catch (Exception ignore) {
+            // Python 尚未启动或 bridge 模块缺失：历史将回退到脚本目录，不影响其他功能。
+        }
     }
 
     /** 统一把异常包成桥接层可识别的 JSON 错误，避免 JS 侧 JSON.parse 抛错。 */
@@ -50,6 +57,33 @@ public class JsBridge {
     public String get_last() {
         try {
             return bridgeModule().callAttr("get_last").toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    @android.webkit.JavascriptInterface
+    public String get_history() {
+        try {
+            return bridgeModule().callAttr("get_history").toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    @android.webkit.JavascriptInterface
+    public String del_history(String ip) {
+        try {
+            return bridgeModule().callAttr("del_history", ip).toString();
+        } catch (Exception e) {
+            return err(e);
+        }
+    }
+
+    @android.webkit.JavascriptInterface
+    public String clear_history() {
+        try {
+            return bridgeModule().callAttr("clear_history").toString();
         } catch (Exception e) {
             return err(e);
         }

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mdp_client  # noqa: E402
@@ -50,6 +51,59 @@ def is_valid_target(s):
     if re.match(r"^(\d{1,3}\.){3}\d{1,3}$", s):
         return all(0 <= int(p) <= 255 for p in s.split("."))
     return bool(re.match(r"^[a-zA-Z0-9\-\.]+$", s))
+
+
+# ---------------------------------------------------------------------------
+# 最近连接历史（持久化到 App 私有目录）
+# ---------------------------------------------------------------------------
+# 桌面预览时 Java 侧不会调用 set_data_dir，则回退到脚本所在目录。
+_DATA_DIR = None  # 由 Java 侧经 set_data_dir() 注入（App 私有 files 目录）
+_HISTORY_FILE = "history.json"
+_MAX_HISTORY = 5
+
+
+def set_data_dir(path):
+    global _DATA_DIR
+    _DATA_DIR = path
+
+
+def _history_path():
+    base = _DATA_DIR if _DATA_DIR else os.path.dirname(os.path.abspath(__file__))
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(base, _HISTORY_FILE)
+
+
+def _load_history():
+    try:
+        with open(_history_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            # 兼容旧版纯字符串历史
+            out = []
+            for h in data:
+                if isinstance(h, dict) and h.get("ip"):
+                    out.append(h)
+                elif isinstance(h, str) and h:
+                    out.append({"ip": h, "ts": 0})
+            return out
+    except Exception:
+        pass
+    return []
+
+
+def _save_history(data):
+    path = _history_path()
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +238,7 @@ class Api:
         self.nic_data = []
         self.time_mod = None
         self.last_time = None
-        self.last_ip = ""  # 记住最近一次成功连接的 IP，供 UI 预填
+        self.history = _load_history()  # 最近连接历史，持久化到 App 私有目录
 
     def connect(self, ip, user=None, pw=None):
         if not is_valid_target(ip):
@@ -202,7 +256,7 @@ class Api:
             self.nic_data = nics
             self.time_mod = c.find_module(mdp_client.TYPE_TIME)
             self.last_time = t
-            self.last_ip = ip
+            self.add_history(ip)
             return {"ok": True, "nics": nics, "time": t}
         except Exception as e:
             return {"ok": False, "msg": "连接失败：{}".format(e)}
@@ -309,6 +363,32 @@ class Api:
         self.time_mod = None
         return {"ok": True}
 
+    def add_history(self, ip):
+        ip = (ip or "").strip()
+        if not ip:
+            return self.history
+        self.history = [h for h in self.history
+                        if (h.get("ip") if isinstance(h, dict) else h) != ip]
+        self.history.insert(0, {"ip": ip, "ts": int(time.time())})
+        self.history = self.history[:_MAX_HISTORY]
+        _save_history(self.history)
+        return self.history
+
+    def get_history(self):
+        return self.history
+
+    def del_history(self, ip):
+        ip = (ip or "").strip()
+        self.history = [h for h in self.history
+                        if (h.get("ip") if isinstance(h, dict) else h) != ip]
+        _save_history(self.history)
+        return self.history
+
+    def clear_history(self):
+        self.history = []
+        _save_history(self.history)
+        return self.history
+
     def scan_subnets(self):
         try:
             subs, dbg = get_subnets()
@@ -380,7 +460,20 @@ def _as_int(v, default=None):
 
 
 def get_last():
-    return get_api().last_ip
+    h = get_api().history
+    return h[0].get("ip") if h and isinstance(h[0], dict) else ""
+
+
+def get_history():
+    return _j(get_api().get_history())
+
+
+def del_history(ip):
+    return _j(get_api().del_history(ip))
+
+
+def clear_history():
+    return _j(get_api().clear_history())
 
 
 def connect(ip):
